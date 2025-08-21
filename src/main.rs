@@ -19,6 +19,13 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 // Include the generated protobuf code
 include!(concat!(env!("OUT_DIR"), "/prometheus.rs"));
 
+// Check if detailed time series printing is enabled
+fn should_print_detailed_timeseries() -> bool {
+    std::env::var("PRINT_TIMESERIES")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
@@ -44,6 +51,13 @@ async fn main() -> Result<()> {
     info!("Send remote write requests to:");
     info!("   POST http://localhost:9090/api/v1/write");
     info!("   POST http://localhost:9090/receive");
+    info!("");
+
+    if should_print_detailed_timeseries() {
+        info!("Detailed time series printing: ENABLED (PRINT_TIMESERIES=true)");
+    } else {
+        info!("Detailed time series printing: DISABLED (set PRINT_TIMESERIES=1 or true to enable)");
+    }
     info!("");
 
     axum::serve(listener, app).await?;
@@ -218,91 +232,107 @@ fn print_write_request(request: &WriteRequest) {
         }
     }
 
-    // Print time series
-    for (i, ts) in request.timeseries.iter().enumerate() {
-        println!("\nTimeSeries [{}]:", i);
+    // Print time series (optional, controlled by environment variable)
+    if should_print_detailed_timeseries() {
+        for (i, ts) in request.timeseries.iter().enumerate() {
+            println!("\nTimeSeries [{}]:", i);
 
-        // Print labels
-        print_labels(&ts.labels);
+            // Print labels
+            print_labels(&ts.labels);
 
-        // Print samples
-        if !ts.samples.is_empty() {
-            println!("   Samples ({}):", ts.samples.len());
-            for (j, sample) in ts.samples.iter().enumerate() {
-                let dt = timestamp_to_datetime(sample.timestamp);
-                println!(
-                    "      [{}] {} @ {} ({})",
-                    j, sample.value, sample.timestamp, dt
-                );
+            // Print samples
+            if !ts.samples.is_empty() {
+                println!("   Samples ({}):", ts.samples.len());
+                for (j, sample) in ts.samples.iter().enumerate() {
+                    let dt = timestamp_to_datetime(sample.timestamp);
+                    println!(
+                        "      [{}] {} @ {} ({})",
+                        j, sample.value, sample.timestamp, dt
+                    );
+                }
             }
-        }
 
-        // Print exemplars
-        if !ts.exemplars.is_empty() {
-            println!("   Exemplars ({}):", ts.exemplars.len());
-            for (j, exemplar) in ts.exemplars.iter().enumerate() {
-                let dt = timestamp_to_datetime(exemplar.timestamp);
-                println!(
-                    "      [{}] {} @ {} ({})",
-                    j, exemplar.value, exemplar.timestamp, dt
-                );
-                if !exemplar.labels.is_empty() {
-                    print!("         Labels: ");
-                    for (k, label) in exemplar.labels.iter().enumerate() {
-                        if k > 0 {
-                            print!(", ");
+            // Print exemplars
+            if !ts.exemplars.is_empty() {
+                println!("   Exemplars ({}):", ts.exemplars.len());
+                for (j, exemplar) in ts.exemplars.iter().enumerate() {
+                    let dt = timestamp_to_datetime(exemplar.timestamp);
+                    println!(
+                        "      [{}] {} @ {} ({})",
+                        j, exemplar.value, exemplar.timestamp, dt
+                    );
+                    if !exemplar.labels.is_empty() {
+                        print!("         Labels: ");
+                        for (k, label) in exemplar.labels.iter().enumerate() {
+                            if k > 0 {
+                                print!(", ");
+                            }
+                            print!("{}=\"{}\"", label.name, label.value);
                         }
-                        print!("{}=\"{}\"", label.name, label.value);
+                        println!();
                     }
-                    println!();
+                }
+            }
+
+            // Print histograms
+            if !ts.histograms.is_empty() {
+                println!("   Histograms ({}):", ts.histograms.len());
+                for (j, histogram) in ts.histograms.iter().enumerate() {
+                    let dt = timestamp_to_datetime(histogram.timestamp);
+                    println!("      [{}] @ {} ({})", j, histogram.timestamp, dt);
+
+                    match &histogram.count {
+                        Some(histogram::Count::CountInt(c)) => {
+                            println!("         Count: {}", c)
+                        }
+                        Some(histogram::Count::CountFloat(c)) => {
+                            println!("         Count: {}", c)
+                        }
+                        None => {}
+                    }
+
+                    println!("         Sum: {}", histogram.sum);
+                    println!("         Schema: {}", histogram.schema);
+                    println!("         Zero threshold: {}", histogram.zero_threshold);
+
+                    match &histogram.zero_count {
+                        Some(histogram::ZeroCount::ZeroCountInt(c)) => {
+                            println!("         Zero count: {}", c)
+                        }
+                        Some(histogram::ZeroCount::ZeroCountFloat(c)) => {
+                            println!("         Zero count: {}", c)
+                        }
+                        None => {}
+                    }
+
+                    if !histogram.positive_spans.is_empty() {
+                        println!(
+                            "         Positive spans: {} buckets",
+                            histogram.positive_spans.len()
+                        );
+                    }
+                    if !histogram.negative_spans.is_empty() {
+                        println!(
+                            "         Negative spans: {} buckets",
+                            histogram.negative_spans.len()
+                        );
+                    }
                 }
             }
         }
+    } else {
+        println!("\nTimeSeries details: HIDDEN (set PRINT_TIMESERIES=1 to show)");
 
-        // Print histograms
-        if !ts.histograms.is_empty() {
-            println!("   Histograms ({}):", ts.histograms.len());
-            for (j, histogram) in ts.histograms.iter().enumerate() {
-                let dt = timestamp_to_datetime(histogram.timestamp);
-                println!("      [{}] @ {} ({})", j, histogram.timestamp, dt);
-
-                match &histogram.count {
-                    Some(histogram::Count::CountInt(c)) => {
-                        println!("         Count: {}", c)
-                    }
-                    Some(histogram::Count::CountFloat(c)) => {
-                        println!("         Count: {}", c)
-                    }
-                    None => {}
-                }
-
-                println!("         Sum: {}", histogram.sum);
-                println!("         Schema: {}", histogram.schema);
-                println!("         Zero threshold: {}", histogram.zero_threshold);
-
-                match &histogram.zero_count {
-                    Some(histogram::ZeroCount::ZeroCountInt(c)) => {
-                        println!("         Zero count: {}", c)
-                    }
-                    Some(histogram::ZeroCount::ZeroCountFloat(c)) => {
-                        println!("         Zero count: {}", c)
-                    }
-                    None => {}
-                }
-
-                if !histogram.positive_spans.is_empty() {
-                    println!(
-                        "         Positive spans: {} buckets",
-                        histogram.positive_spans.len()
-                    );
-                }
-                if !histogram.negative_spans.is_empty() {
-                    println!(
-                        "         Negative spans: {} buckets",
-                        histogram.negative_spans.len()
-                    );
-                }
+        // Show just a count of unique metric names
+        let mut metric_names = std::collections::HashSet::new();
+        for ts in &request.timeseries {
+            if let Some(name_label) = ts.labels.iter().find(|l| l.name == "__name__") {
+                metric_names.insert(name_label.value.clone());
             }
+        }
+
+        if !metric_names.is_empty() {
+            println!("Unique metrics: {}", metric_names.len());
         }
     }
 
